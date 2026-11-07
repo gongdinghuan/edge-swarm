@@ -1,0 +1,24 @@
+[Unit]
+Description=Edge Swarm outbound worker
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=120s
+StartLimitBurst=5
+
+[Service]
+Type=exec
+DynamicUser=yes
+LoadCredential=swarm.env:/etc/edge-swarm/worker.env
+UMask=0077
+ExecStart=/bin/bash /opt/edge-swarm-worker/swarm.sh run
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGINT
+TimeoutStopSec=15s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

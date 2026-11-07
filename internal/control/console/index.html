@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>蜂群 · 推理控制台</title>
+  <link rel="stylesheet" href="/assets/console.css">
+  <script defer src="/assets/console.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#workspace">跳转至工作区</a>
+  <div class="shell">
+    <aside class="rail" aria-label="控制台导航">
+      <a class="brand" href="#overview" aria-label="蜂群概览">
+        <svg class="brand-mark" width="38" height="38" viewBox="0 0 38 38" fill="none" aria-hidden="true">
+          <path d="M19 5 30 11.4v12.7L19 30.5 8 24.1V11.4L19 5Z" stroke="currentColor" stroke-width="1.7"/>
+          <path d="m8 11.4 11 6.4 11-6.4m-11 6.4v12.7" stroke="currentColor" stroke-width="1.7"/>
+        </svg>
+        <span><strong>蜂群</strong><small>推理控制台</small></span>
+      </a>
+      <nav class="section-nav" aria-label="页面分区">
+        <a href="#overview"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="12" y="3" width="5" height="5" rx="1"/><rect x="3" y="12" width="5" height="5" rx="1"/><rect x="12" y="12" width="5" height="5" rx="1"/></svg>概览</a>
+        <a href="#inference-panel"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m11 2-7 9h5l-1 7 8-10h-6l1-6Z"/></svg>推理</a>
+        <a href="#tasks-panel"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 5h10M7 10h10M7 15h10M3 5h.01M3 10h.01M3 15h.01"/></svg>任务</a>
+        <a href="#devices-panel"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="14" height="10" rx="2"/><path d="M10 13v4m-4 0h8"/></svg>设备</a>
+        <a href="#connection-panel"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 7.5 10.5 5a3.2 3.2 0 0 1 4.5 4.5L12.5 12m-.5.5L9.5 15A3.2 3.2 0 0 1 5 10.5L7.5 8m0 4.5 5-5"/></svg>连接配置</a>
+      </nav>
+    </aside>
+
+    <main id="workspace" class="workspace" tabindex="-1">
+      <section id="overview" class="masthead" aria-labelledby="page-title">
+        <div>
+          <h1 id="page-title">边缘推理集群</h1>
+          <p>提交模型请求，跟踪任务和设备状态。</p>
+        </div>
+        <span id="status" role="status" class="status" data-state="loading">正在检查服务</span>
+      </section>
+
+      <dl class="overview" aria-label="集群概览">
+        <div><dt>可用模型</dt><dd id="summary-models">—</dd><dd class="metric-caption">业务权限内</dd></div>
+        <div><dt>最近任务</dt><dd id="summary-tasks">—</dd><dd class="metric-caption">当前加载的记录</dd></div>
+        <div><dt>已连接设备</dt><dd id="summary-nodes">—</dd><dd class="metric-caption">管理员可见</dd></div>
+      </dl>
+
+      <section id="connection-panel" class="card connection" aria-labelledby="auth-title">
+        <div class="section-head">
+          <div><h2 id="auth-title">连接配置</h2><p class="muted">密钥仅保留在当前页面。</p></div>
+        </div>
+        <form id="credentials" class="credential-grid">
+          <div class="field">
+            <label for="api-key">业务密钥</label>
+            <input type="password" id="api-key" autocomplete="off" spellcheck="false" placeholder="输入业务密钥" aria-describedby="api-status">
+            <span id="api-status" class="field-note" role="status">用于推理和任务查询</span>
+          </div>
+          <div class="field">
+            <label for="admin-key">管理员密钥</label>
+            <input type="password" id="admin-key" autocomplete="off" spellcheck="false" placeholder="输入管理员密钥" aria-describedby="admin-status">
+            <span id="admin-status" class="field-note" role="status">用于设备管理，可按需填写</span>
+          </div>
+          <button class="secondary" type="submit">应用密钥</button>
+        </form>
+      </section>
+
+      <div id="notice" role="alert"></div>
+
+      <div class="work-grid">
+        <section id="inference-panel" class="card" aria-labelledby="infer-title">
+          <div class="section-head"><div><h2 id="infer-title">推理工作台</h2><p class="muted">选择模型，提交提示词并实时查看输出。</p></div></div>
+          <form id="inference">
+            <div class="inference-grid">
+              <div class="field">
+                <label for="model">模型</label>
+                <input id="model" list="models" required placeholder="选择或输入模型名" aria-describedby="model-status">
+                <datalist id="models"></datalist>
+                <span id="model-status" class="field-note" role="status">连接后可查看可用模型</span>
+              </div>
+              <div class="field">
+                <label for="tokens">最大输出 token</label>
+                <input id="tokens" type="number" min="1" max="4096" value="128" required>
+              </div>
+            </div>
+            <div class="field prompt-field">
+              <label for="prompt">提示词</label>
+              <textarea id="prompt" rows="4" maxlength="12000" required placeholder="输入要发送给模型的内容"></textarea>
+            </div>
+            <div class="actions">
+              <button type="submit" id="generate">流式生成</button>
+              <button type="button" class="secondary" id="stop" disabled>停止生成</button>
+            </div>
+          </form>
+
+          <div class="output-box">
+            <div class="output-head"><h3 id="output-title">生成结果</h3><span id="stream-status" class="tag" role="status">等待生成</span></div>
+            <pre id="output" aria-labelledby="output-title" tabindex="0">推理结果将在这里显示。</pre>
+          </div>
+
+          <details class="batch-tools">
+            <summary>离线批量任务</summary>
+            <form id="batch-form">
+              <div class="field">
+                <label for="batch-prompts">批量提示词</label>
+                <textarea id="batch-prompts" rows="4" maxlength="24000" required aria-describedby="batch-help" placeholder="每行输入一条提示词"></textarea>
+                <span id="batch-help" class="field-note">最多 20 条，沿用上方模型和最大输出 token。</span>
+              </div>
+              <div class="actions"><button type="submit" class="secondary" id="batch">提交离线任务</button></div>
+              <pre id="batch-status" role="status"></pre>
+            </form>
+          </details>
+        </section>
+
+        <section id="tasks-panel" class="card" aria-labelledby="jobs-title">
+          <div class="section-head">
+            <div><h2 id="jobs-title">最近任务</h2><p class="muted">查看当前租户的推理和批处理记录。</p></div>
+            <button type="button" class="secondary" id="refresh">刷新</button>
+          </div>
+          <div id="jobs" class="table-scroll">
+            <div class="empty-state"><strong>任务列表待加载</strong><p>应用业务密钥后，任务会显示在这里。</p></div>
+          </div>
+          <details class="batch-tools">
+            <summary>按批组 ID 查询</summary>
+            <form id="batch-lookup" class="enroll-form">
+              <div class="field"><label for="batch-id">批组 ID</label><input id="batch-id" maxlength="32" pattern="[0-9a-fA-F]{32}" required spellcheck="false" placeholder="输入 32 位批组 ID"></div>
+              <button type="submit" class="secondary">查询</button>
+              <span id="batch-lookup-status" class="field-note lookup-status" role="status"></span>
+            </form>
+          </details>
+          <div id="batch-detail" class="batch-detail"></div>
+          <div class="output-box task-output">
+            <div class="output-head"><h3 id="job-detail-title">任务详情</h3></div>
+            <pre id="job-detail" aria-labelledby="job-detail-title" aria-live="polite" tabindex="0">选择一条任务查看详情。</pre>
+          </div>
+        </section>
+      </div>
+
+      <section id="devices-panel" class="card" aria-labelledby="nodes-title">
+        <div class="section-head">
+          <div><h2 id="nodes-title">设备管理</h2><p class="muted">查看节点状态，注册设备或调整接单状态。</p></div>
+          <form id="enroll" class="enroll-form">
+            <div class="field"><label for="node-model">新设备模型名</label><input id="node-model" required placeholder="例如 qwen-05b"></div>
+            <button type="submit">注册设备</button>
+          </form>
+        </div>
+        <div id="node-secret" class="secret-box" hidden>
+          <p><strong>设备连接凭据</strong></p>
+          <p>请安全保存以下信息。刷新后无法重新显示该密钥。</p>
+          <pre id="node-token" tabindex="0"></pre>
+          <button class="secondary" type="button" id="hide-token">关闭凭据</button>
+        </div>
+        <div id="nodes" class="table-scroll">
+          <div class="empty-state"><strong>设备列表待加载</strong><p>应用管理员密钥后，可查看设备及接单状态。</p></div>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

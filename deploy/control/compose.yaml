@@ -1,0 +1,67 @@
+# Pin POSTGRES_IMAGE and CADDY_IMAGE to reviewed immutable digests before use.
+services:
+  control:
+    build: ../..
+    entrypoint: ["/usr/local/bin/control-entrypoint"]
+    command: ["-listen", "0.0.0.0:8080"]
+    environment:
+      SWARM_MODEL_ACCESS: ${SWARM_MODEL_ACCESS:-}
+    secrets: [postgres_password, swarm_api_keys, swarm_admin_token]
+    networks: [frontend, database]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    stop_signal: SIGINT
+    stop_grace_period: 10s
+    read_only: true
+    tmpfs: [/tmp]
+  postgres:
+    image: ${POSTGRES_IMAGE:?set reviewed PostgreSQL image digest}
+    environment:
+      POSTGRES_USER: swarm
+      POSTGRES_DB: swarm
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    networks: [database]
+    volumes: ["database:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U swarm -d swarm"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  caddy:
+    image: ${CADDY_IMAGE:?set reviewed Caddy image digest}
+    environment:
+      SWARM_DOMAIN: ${SWARM_DOMAIN:?public domain required}
+    ports: ["80:80", "443:443"]
+    networks: [frontend]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - certificates:/data
+      - caddy-config:/config
+    depends_on:
+      control:
+        condition: service_healthy
+    restart: unless-stopped
+secrets:
+  postgres_password:
+    file: ${SWARM_SECRETS_DIR:?set absolute path to private secrets directory}/postgres_password
+  swarm_api_keys:
+    file: ${SWARM_SECRETS_DIR:?set absolute path to private secrets directory}/swarm_api_keys
+  swarm_admin_token:
+    file: ${SWARM_SECRETS_DIR:?set absolute path to private secrets directory}/swarm_admin_token
+networks:
+  frontend:
+  database:
+    internal: true
+volumes:
+  database:
+  certificates:
+  caddy-config:

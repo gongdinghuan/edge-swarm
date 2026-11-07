@@ -1,0 +1,27 @@
+[Unit]
+Description=Edge Swarm management node
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=120s
+StartLimitBurst=5
+
+[Service]
+Type=exec
+DynamicUser=yes
+LoadCredential=swarm.env:/etc/edge-swarm/manager.env
+StateDirectory=edge-swarm
+StateDirectoryMode=0700
+UMask=0077
+ExecStart=/bin/bash /opt/edge-swarm-manager/swarm.sh run
+ExecStartPost=/bin/bash /opt/edge-swarm-manager/swarm.sh ready
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=45s
+TimeoutStopSec=15s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

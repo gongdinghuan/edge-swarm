@@ -1,0 +1,21 @@
+[Unit]
+Description=Edge Swarm outbound worker
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+EnvironmentFile=/etc/edge-swarm/agent.env
+ExecStart=/usr/local/bin/swarm-agent -control ${SWARM_CONTROL_URL} -model ${SWARM_MODEL} -backend ${SWARM_BACKEND_URL}
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGINT
+TimeoutStopSec=15s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

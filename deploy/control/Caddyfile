@@ -1,0 +1,4 @@
+{$SWARM_DOMAIN} {
+    # Caddy flushes SSE immediately with its normal disconnect handling.
+    reverse_proxy control:8080
+}

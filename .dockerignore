@@ -1,0 +1,8 @@
+.git
+.tools
+data
+bin
+*.db*
+.env
+**/.env
+**/secrets

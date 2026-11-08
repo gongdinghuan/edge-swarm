@@ -39,11 +39,20 @@ let business = {key: '', authorized: false};
 let admin = {key: '', authorized: false};
 let active = null, poll = null, busyBatch = null, busyEnroll = null, group = null;
 let models = [], modelsLoaded = false, centralReady = false;
+let recentJobs = [], registeredNodes = [], outputAvailable = false;
+let apiFormat = 'python';
 let selection = 0;
 
 function setText(id, message) {
   const element = $(id);
-  if (element) element.textContent = message;
+  if (element && element.textContent !== message) element.textContent = message;
+}
+
+function element(name, className, text) {
+  const node = document.createElement(name);
+  node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
 }
 
 function tell(message, tone = 'info') {
@@ -153,6 +162,8 @@ function updateButtons() {
   $('generate').disabled = !centralReady || !business.authorized || active !== null;
   $('stop').disabled = !active || active.stopped;
   $('batch').disabled = !centralReady || !business.authorized || busyBatch !== null;
+  $('copy-output').disabled = !outputAvailable;
+  setText('header-access-label', admin.authorized ? '管理员已连接' : business.authorized ? '业务已连接' : '连接密钥');
   const enrollButton = $('enroll').querySelector('button[type="submit"]');
   if (enrollButton) enrollButton.disabled = !centralReady || !admin.authorized || busyEnroll !== null;
 }
@@ -160,14 +171,21 @@ function updateButtons() {
 function renderModels(entries) {
   models = entries.map(model => model.id).sort((a, b) => a.localeCompare(b));
   modelsLoaded = true;
-  $('models').replaceChildren(...models.map(model => {
-    const option = document.createElement('option');
-    option.value = model;
-    return option;
-  }));
+  const options = $('models');
+  if (!unchanged(options, models)) options.replaceChildren(...models.map(model => new Option(model, model)));
   if (!$('model').value && models.length === 1) $('model').value = models[0];
   setText('summary-models', String(models.length));
+  const catalog = $('catalog-list');
+  if (!unchanged(catalog, models)) {
+    if (!models.length) empty('catalog-list', '当前业务密钥暂无可用模型。');
+    else catalog.replaceChildren(...models.map(model => {
+      const entry = element('article', 'catalog-model');
+      entry.append(element('code', 'chip', model), button('使用模型', () => selectModel(model)));
+      return entry;
+    }));
+  }
   updateModelStatus();
+  renderAPIExample();
 }
 
 function unchanged(target, value) {
@@ -202,7 +220,10 @@ async function showJob(job, credentials) {
 function jobActions(job, credentials) {
   const actions = document.createElement('div');
   actions.className = 'actions';
-  actions.append(button('详情', () => showJob(job, credentials)));
+  actions.append(button('详情', () => {
+    location.hash = 'job-detail-title';
+    return showJob(job, credentials);
+  }));
   if (pending(job)) actions.append(button('取消', async () => {
     await request(taskPath(job) + '/cancel', credentials.key, {method: 'POST'});
     if (business !== credentials) return;
@@ -214,19 +235,100 @@ function jobActions(job, credentials) {
 
 function renderJobs(items, credentials) {
   items.sort((a, b) => (b.created_ms ?? b.deadline_ms) - (a.created_ms ?? a.deadline_ms));
+  recentJobs = items;
+  renderActivity(items);
   const visible = items.slice(0, 20);
-  setText('summary-tasks', String(visible.length));
   if (unchanged($('jobs'), visible.map(job => [job.id, job.kind, job.model, job.status]))) return;
   table($('jobs'), ['任务', '模型', '类型', '状态', '操作'], visible.map(job => [
     shortID(job.id), job.model, job.kind === 'batch' ? '离线' : '对话', tag(job.status), jobActions(job, credentials),
   ]));
 }
 
+function renderActivity(items, message = '连接业务密钥后查看近期任务。') {
+  for (const [id, state] of [['activity-queued', 'queued'], ['activity-running', 'running'], ['activity-done', 'succeeded']]) {
+    const count = items ? String(items.filter(job => job.status === state).length) : '—';
+    setText(id, count);
+    if (state === 'running') setText('summary-tasks', count);
+    if (state === 'queued') setText('summary-queued', count);
+  }
+  const target = $('activity-jobs');
+  const jobs = items?.slice(0, 5) || [];
+  if (unchanged(target, [message, Boolean(items), jobs.map(job => [job.id, job.model, job.status])])) return;
+  if (!jobs.length) {
+    target.replaceChildren(element('li', 'activity-empty muted', items ? '暂无近期任务。' : message));
+    return;
+  }
+  target.replaceChildren(...jobs.map(job => {
+    const item = element('li', 'activity-job');
+    item.append(shortID(job.id), element('span', 'activity-model', job.model), tag(job.status));
+    return item;
+  }));
+}
+
+function renderTopology(nodes, message = '连接管理员密钥后查看节点拓扑。') {
+  const target = $('topology-nodes');
+  const connected = nodes?.filter(node => node.connected) || [];
+  setText('summary-nodes', nodes ? String(connected.length) : '—');
+  setText('summary-node-total', nodes ? String(nodes.length) : '—');
+  setText('topology-topline', nodes ? `${connected.length} 个已连接 · ${connected.filter(node => node.state === 'ready').length} 个可接单` : '管理员视图');
+  if (!connected.length) {
+    const content = nodes ? '暂无已连接节点。' : message;
+    if (!unchanged(target, content)) target.replaceChildren(element('p', 'empty-state muted', content));
+    return;
+  }
+  const visible = connected.slice(0, 2);
+  if (unchanged(target, [connected.length, visible.map(node => [node.id, node.state, node.active, node.model, node.gpu, node.vram_mib, node.backend_kind])])) return;
+  const workers = visible.map(node => {
+    const worker = element('article', 'topology-worker');
+    const head = element('div', 'topology-worker-head');
+    const name = element('strong', '', '工作节点');
+    head.append(name, shortID(node.id), tag(node.state, node.active ? ' · 执行中' : ''));
+    const meta = element('div', 'topology-worker-meta');
+    meta.append(element('span', 'chip', node.model), element('span', 'muted',
+      [node.backend_kind, node.gpu, node.vram_mib && `${node.vram_mib} MiB`].filter(Boolean).join(' · ') || '硬件信息未上报'));
+    worker.append(head, meta);
+    return worker;
+  });
+  if (connected.length > workers.length) {
+    const more = element('a', 'topology-more', `查看全部 ${connected.length} 个在线节点`);
+    more.href = '#devices-panel';
+    workers.push(more);
+  }
+  target.replaceChildren(...workers);
+}
+
 function renderNodes(nodes, credentials) {
-  setText('summary-nodes', String(nodes.filter(node => node.connected).length));
-  const visible = nodes.map(node => [node.id, node.model, node.state, node.active, node.backend_kind, node.gpu, node.vram_mib]);
-  if (unchanged($('nodes'), visible)) return;
-  table($('nodes'), ['设备', '模型', '状态', '后端 / GPU / 显存', '操作'], nodes.map(node => {
+  registeredNodes = nodes;
+  renderTopology(nodes);
+  const modelFilter = $('node-model-filter');
+  const modelNames = [...new Set(nodes.map(node => node.model))].sort((a, b) => a.localeCompare(b));
+  if (!unchanged(modelFilter, modelNames)) {
+    const selected = modelFilter.value;
+    modelFilter.replaceChildren(new Option('全部模型', ''), ...modelNames.map(model => new Option(model, model)));
+    if (modelNames.includes(selected)) modelFilter.value = selected;
+  }
+  renderFilteredNodes(credentials);
+}
+
+function renderFilteredNodes(credentials = admin) {
+  if (!credentials.authorized) return;
+  const query = $('node-filter').value.trim().toLowerCase(), state = $('node-state').value, model = $('node-model-filter').value;
+  const nodes = registeredNodes.filter(node => (!state || node.state === state) && (!model || node.model === model) &&
+    [node.id, node.model, node.gpu, node.backend_kind].some(value => value?.toLowerCase().includes(query)));
+  if (!nodes.length) {
+    empty('nodes', registeredNodes.length ? '没有符合筛选条件的节点。' : '暂无已注册的节点。');
+    return;
+  }
+  const target = $('nodes');
+  const snapshot = nodes.map(({last_seen, ...node}) => node);
+  if (unchanged(target, snapshot)) {
+    target.querySelectorAll('.node-last-seen').forEach((cell, i) => {
+      const time = lastSeen(nodes[i]);
+      if (cell.textContent !== time) cell.textContent = time;
+    });
+    return;
+  }
+  table(target, ['节点 ID', '连接', '就绪状态', '模型 ID', 'GPU', '总显存', '最近心跳', '操作'], nodes.map(node => {
     const actions = document.createElement('div');
     actions.className = 'actions';
     const path = '/swarm/v1/nodes/' + encodeURIComponent(node.id);
@@ -241,12 +343,19 @@ function renderNodes(nodes, credentials) {
         if (confirm('撤销此设备的连接凭据？')) return operate('revoke');
       }));
     }
-    return [
-      shortID(node.id), node.model, tag(node.state, node.active ? ' · 执行中' : ''),
-      [node.backend_kind, node.gpu, node.vram_mib && `${node.vram_mib} MiB`].filter(Boolean).join(' / ') || '—',
-      actions,
-    ];
+    const link = tag(node.connected ? 'ready' : 'offline');
+    if (node.connected) link.textContent = '在线';
+    const gpu = element('span', '', node.gpu || '—');
+    if (node.backend_kind) gpu.title = node.backend_kind;
+    return [shortID(node.id), link, tag(node.state, node.active ? ' · 执行中' : ''), element('span', 'chip', node.model),
+      gpu, node.vram_mib ? `${node.vram_mib} MiB` : '—', element('span', 'node-last-seen', lastSeen(node)), actions];
   }));
+}
+
+function lastSeen(node) {
+  if (!node.last_seen) return '—';
+  const date = new Date(node.last_seen);
+  return Number.isFinite(date.getTime()) ? date.toLocaleTimeString('zh-CN', {hour12: false}) : '—';
 }
 
 function groupPath(id) {
@@ -310,7 +419,8 @@ async function refresh() {
     apiCredentials.authorized = false;
     models = [];
     modelsLoaded = false;
-    $('models').replaceChildren();
+    emptyModelOptions();
+    empty('catalog-list', displayError(error));
     setText('summary-models', '—');
     setText('api-status', displayError(error));
     updateModelStatus();
@@ -323,7 +433,8 @@ async function refresh() {
     if (poll === current) renderJobs([...jobs.data, ...requests.data], apiCredentials);
   }, error => {
     if (poll !== current) return;
-    setText('summary-tasks', '—');
+    recentJobs = [];
+    renderActivity(null, displayError(error));
     empty('jobs', displayError(error));
   });
   const nodeInfo = adminCredentials.key && fetchJSON('/swarm/v1/nodes', adminCredentials).then(value => {
@@ -335,9 +446,8 @@ async function refresh() {
   }, error => {
     if (poll !== current) return;
     adminCredentials.authorized = false;
-    setText('summary-nodes', '—');
+    resetNodes(displayError(error));
     setText('admin-status', displayError(error));
-    empty('nodes', displayError(error));
     updateButtons();
   });
   const groupInfo = currentGroup?.jobs.some(pending) && fetchJSON(groupPath(currentGroup.id), apiCredentials).then(value => {
@@ -346,10 +456,103 @@ async function refresh() {
     if (poll === current && group === currentGroup) setText('batch-status', displayError(error));
   });
   await Promise.allSettled([health, apiInfo, taskInfo, nodeInfo, groupInfo]);
+  if (poll === current && !$('search-results').hidden) renderSearch();
 }
 
-function payload(model, prompt, tokens, stream) {
-  return {model, messages: [{role: 'user', content: prompt}], max_tokens: tokens, stream};
+function resetNodes(message) {
+  registeredNodes = [];
+  const filter = $('node-model-filter');
+  delete filter.dataset.snapshot;
+  filter.replaceChildren(new Option('全部模型', ''));
+  renderTopology(null, message);
+  empty('nodes', message);
+}
+
+function emptyModelOptions() {
+  const options = $('models');
+  delete options.dataset.snapshot;
+  options.replaceChildren();
+}
+
+function payload(model, prompt, tokens, stream, temperature) {
+  const body = {model, messages: [{role: 'user', content: prompt}], max_tokens: tokens, stream};
+  if (temperature !== undefined) body.temperature = temperature;
+  return body;
+}
+
+function apiExample(format, origin, body) {
+  const quote = value => "'" + value.replace(/'/g, "'\"'\"'") + "'";
+  if (format === 'curl') return [
+    `curl ${body.stream ? '-N ' : ''}${quote(origin + '/v1/chat/completions')} \\`,
+    '  -H "Authorization: Bearer $SWARM_API_KEY" \\',
+    "  -H 'Content-Type: application/json' \\",
+    `  --data ${quote(JSON.stringify(body))}`,
+  ].join('\n');
+  return [
+    '# OpenAI 兼容客户端', 'import os', 'from openai import OpenAI', '', 'client = OpenAI(',
+    `    base_url=${JSON.stringify(origin + '/v1')},`, '    api_key=os.environ["SWARM_API_KEY"],', ')', '',
+    'response = client.chat.completions.create(', `    model=${JSON.stringify(body.model)},`,
+    `    messages=${JSON.stringify(body.messages)},`, `    max_tokens=${body.max_tokens},`,
+    `    temperature=${body.temperature},`, `    stream=${body.stream ? 'True' : 'False'},`, ')', '',
+    ...(body.stream ? ['for event in response:', '    if event.choices:', '        print(event.choices[0].delta.content or "", end="", flush=True)']
+      : ['print(response.choices[0].message.content)']),
+  ].join('\n');
+}
+
+function renderAPIExample() {
+  const body = payload($('model').value.trim() || 'your-model', '请介绍一下蜂群。', Number($('tokens').value),
+    $('stream-mode').checked, Number($('temperature').value));
+  $('api-format-python').setAttribute('aria-pressed', String(apiFormat === 'python'));
+  $('api-format-curl').setAttribute('aria-pressed', String(apiFormat === 'curl'));
+  setText('api-example', apiExample(apiFormat, location.origin, body));
+}
+
+function selectModel(model) {
+  $('model').value = model;
+  updateModelStatus();
+  renderAPIExample();
+  location.hash = 'inference-panel';
+  $('model').focus({preventScroll: true});
+}
+
+function renderSearch() {
+  const target = $('search-results');
+  const query = $('console-search').value.trim().toLowerCase();
+  if (!query) { target.hidden = true; return; }
+  const hits = [
+    ...models.filter(model => model.toLowerCase().includes(query)).map(model => ['模型', model, () => selectModel(model)]),
+    ...registeredNodes.filter(node => [node.id, node.model].some(value => value.toLowerCase().includes(query)))
+      .map(node => ['节点', node.id, () => {
+        $('node-filter').value = node.id;
+        $('node-state').value = $('node-model-filter').value = '';
+        renderFilteredNodes();
+        location.hash = 'devices-panel';
+        $('node-filter').focus({preventScroll: true});
+      }]),
+    ...recentJobs.filter(job => [job.id, job.model].some(value => value.toLowerCase().includes(query)))
+      .map(job => ['任务', `${job.id.slice(0, 8)} · ${job.model}`, () => {
+        location.hash = 'job-detail-title';
+        $('job-detail').focus({preventScroll: true});
+        return showJob(job, business);
+      }]),
+  ].slice(0, 7);
+  target.hidden = false;
+  if (unchanged(target, [query, hits.map(hit => hit.slice(0, 2))])) return;
+  if (!hits.length) {
+    target.replaceChildren(element('p', 'search-empty muted', '当前已加载数据中没有匹配项。'));
+    return;
+  }
+  target.replaceChildren(...hits.map(([kind, name, action]) => {
+    const hit = button('', () => { target.hidden = true; return action(); });
+    hit.className = 'search-hit';
+    hit.append(element('span', 'search-kind', kind), document.createTextNode(name));
+    return hit;
+  }));
+}
+
+async function copyText(text, message) {
+  try { await navigator.clipboard.writeText(text); tell(message, 'success'); }
+  catch { tell('当前浏览器无法写入剪贴板，请选中文本后手动复制。', 'error'); }
 }
 
 function batchItems(text, model, tokens) {
@@ -405,6 +608,11 @@ function hideToken() {
   $('node-secret').hidden = true;
 }
 
+function streamStatus(text, state = '') {
+  $('stream-status').dataset.status = state;
+  setText('stream-status', text);
+}
+
 function init() {
   $('credentials').addEventListener('submit', event => {
     event.preventDefault();
@@ -417,15 +625,19 @@ function init() {
       group = null;
       models = [];
       modelsLoaded = false;
-      $('models').replaceChildren();
+      recentJobs = [];
+      outputAvailable = false;
+      emptyModelOptions();
       setText('output', '推理结果将在这里显示。');
-      setText('stream-status', '等待提交');
+      streamStatus('等待提交');
+      setText('summary-latency', '—');
       setText('job-detail', '选择任务查看详情。');
       setText('batch-status', '');
       setText('batch-lookup-status', '');
       if ($('batch-id')) $('batch-id').value = '';
       setText('summary-models', '—');
-      setText('summary-tasks', '—');
+      renderActivity(null, apiKey ? '正在加载近期任务…' : '连接业务密钥后查看近期任务。');
+      empty('catalog-list', apiKey ? '正在加载模型…' : '连接业务密钥后可查看模型目录。');
       empty('batch-detail', '提交批组后可在这里查看进度。');
       empty('jobs', apiKey ? '正在加载任务…' : '连接业务密钥后可查看当前租户的任务。');
       setText('api-status', apiKey ? '正在验证业务密钥…' : '业务密钥未连接');
@@ -435,16 +647,61 @@ function init() {
       admin = {key: adminKey, authorized: false};
       busyEnroll = null;
       hideToken();
-      setText('summary-nodes', '—');
-      empty('nodes', adminKey ? '正在加载设备…' : '连接管理员密钥后可管理设备。');
+      resetNodes(adminKey ? '正在加载设备…' : '连接管理员密钥后可管理设备。');
       setText('admin-status', adminKey ? '正在验证管理员密钥…' : '管理员密钥未连接');
     }
+    const results = $('search-results');
+    results.hidden = true;
+    delete results.dataset.snapshot;
+    results.replaceChildren();
     tell('');
     updateButtons();
     refresh();
   });
   $('refresh').addEventListener('click', refresh);
-  $('model').addEventListener('input', updateModelStatus);
+  $('refresh-nodes').addEventListener('click', refresh);
+  $('model').addEventListener('input', () => { updateModelStatus(); renderAPIExample(); });
+  $('tokens').addEventListener('input', renderAPIExample);
+  $('stream-mode').addEventListener('change', renderAPIExample);
+  const temperature = $('temperature');
+  temperature.addEventListener('input', () => { setText('temperature-value', temperature.value); renderAPIExample(); });
+  const prompt = $('prompt');
+  const countPrompt = () => setText('prompt-count', `${prompt.value.length} / ${prompt.maxLength}`);
+  prompt.addEventListener('input', countPrompt);
+  $('prompt-example').addEventListener('click', () => {
+    if (!prompt.value.trim()) prompt.value = '请用三条简短的要点介绍蜂群如何调度异地 GPU。';
+    countPrompt();
+    prompt.focus();
+  });
+  $('prompt-clear').addEventListener('click', () => { prompt.value = ''; countPrompt(); prompt.focus(); });
+  $('copy-output').addEventListener('click', () => copyText($('output').textContent, '已复制生成结果。'));
+  $('copy-api').addEventListener('click', () => copyText($('api-example').textContent, '已复制 API 调用示例。'));
+  for (const format of ['python', 'curl']) {
+    $('api-format-' + format).addEventListener('click', () => { apiFormat = format; renderAPIExample(); });
+  }
+  $('node-filter').addEventListener('input', () => renderFilteredNodes());
+  for (const filter of ['node-state', 'node-model-filter']) $(filter).addEventListener('change', () => renderFilteredNodes());
+  const search = $('console-search'), searchResults = $('search-results');
+  search.addEventListener('input', renderSearch);
+  search.addEventListener('focus', renderSearch);
+  search.addEventListener('keydown', event => {
+    if (event.key === 'Escape') searchResults.hidden = true;
+    if (event.key === 'Enter' && !searchResults.hidden) {
+      event.preventDefault();
+      searchResults.querySelector('button')?.click();
+    }
+  });
+  document.addEventListener('focusin', event => {
+    if (event.target !== search && !searchResults.contains(event.target)) searchResults.hidden = true;
+  });
+  const markNavigation = () => {
+    const current = $(location.hash.slice(1))?.closest('section[id]')?.id || 'overview';
+    for (const link of document.querySelectorAll('.section-nav a')) {
+      if (link.hash === '#' + current) link.setAttribute('aria-current', 'location');
+      else link.removeAttribute('aria-current');
+    }
+  };
+  window.addEventListener('hashchange', markNavigation);
   $('hide-token').addEventListener('click', hideToken);
   $('enroll').addEventListener('submit', async event => {
     event.preventDefault();
@@ -523,7 +780,7 @@ function init() {
 
   $('stop').addEventListener('click', () => {
     if (!active) return;
-    setText('stream-status', '正在停止…');
+    streamStatus('正在停止…', 'queued');
     stopStream(active);
   });
   $('inference').addEventListener('submit', async event => {
@@ -531,30 +788,50 @@ function init() {
     if (!business.authorized || active) return;
     const model = $('model').value.trim(), prompt = $('prompt').value;
     if (!model || !prompt.trim()) { tell('请输入模型名和提示词。', 'error'); return; }
+    const streaming = $('stream-mode').checked, started = performance.now();
     const stream = active = {controller: new AbortController(), credentials: business, id: '', stopped: false};
+    outputAvailable = false;
     updateButtons();
     setText('output', '');
-    setText('stream-status', '等待模型响应…');
+    streamStatus('等待模型响应…', 'queued');
     tell('');
     try {
       const response = await request('/v1/chat/completions', stream.credentials.key, {
         method: 'POST', signal: stream.controller.signal,
-        body: JSON.stringify(payload(model, prompt, Number($('tokens').value), true)),
+        body: JSON.stringify(payload(model, prompt, Number($('tokens').value), streaming, Number(temperature.value))),
       });
       stream.id = response.headers.get('X-Request-ID') || '';
-      const reason = await readStream(response.body, content => {
-        if (active !== stream || stream.stopped) return;
-        setText('stream-status', '正在生成…');
-        $('output').append(document.createTextNode(content));
-      });
+      let reason;
+      if (streaming) {
+        reason = await readStream(response.body, content => {
+          if (active !== stream || stream.stopped) return;
+          if (!outputAvailable) {
+            outputAvailable = true;
+            setText('summary-latency', String(Math.round(performance.now() - started)));
+            streamStatus('正在流式生成…', 'running');
+            updateButtons();
+          }
+          const output = $('output');
+          const follow = output.scrollHeight - output.scrollTop - output.clientHeight < 24;
+          output.append(document.createTextNode(content));
+          if (follow) output.scrollTop = output.scrollHeight;
+        });
+      } else {
+        const choice = (await response.json()).choices?.[0];
+        reason = choice?.finish_reason;
+        if (active === stream && !stream.stopped && typeof choice?.message?.content === 'string') {
+          outputAvailable = Boolean(choice.message.content);
+          setText('output', choice.message.content);
+        }
+      }
       if (active === stream) {
-        setText('stream-status', stream.stopped ? '已停止接收输出' : reasons[reason] || '生成完成');
+        streamStatus(stream.stopped ? '已停止接收输出' : reasons[reason] || '生成完成', stream.stopped ? 'cancelled' : 'succeeded');
         if (!$('output').textContent) setText('output', '模型未返回文本。');
       }
     } catch (error) {
       stream.controller.abort();
       if (active !== stream) return;
-      setText('stream-status', stream.stopped ? '已停止接收输出' : '生成中断');
+      streamStatus(stream.stopped ? '已停止接收输出' : '生成中断', stream.stopped ? 'cancelled' : 'interrupted');
       if (!stream.stopped) tell(displayError(error), 'error');
     } finally {
       if (active === stream) {
@@ -565,6 +842,9 @@ function init() {
     }
   });
 
+  countPrompt();
+  renderAPIExample();
+  markNavigation();
   updateButtons();
   refresh();
   setInterval(refresh, 5000);

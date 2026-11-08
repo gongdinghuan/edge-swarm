@@ -61,7 +61,11 @@ function Add-GpuFiles([string]$Destination) {
         (Get-FileHash -LiteralPath $model).Hash -ne '74A4DA8C9FDBCD15BD1F6D01D621410D31C6FC00986F5EB687824E7B93D7A9DB') {
         throw 'Pinned GPU input checksum mismatch. Repair the build cache before packaging.'
     }
-    Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $target 'llama')
+    $runtime = Join-Path $target 'llama'
+    Expand-Archive -LiteralPath $archive -DestinationPath $runtime
+    # The local Vulkan demo uses llama-server directly.
+    $webRtcTool = Join-Path $runtime 'llama-connect.exe'
+    if (Test-Path -LiteralPath $webRtcTool -PathType Leaf) { Remove-Item -LiteralPath $webRtcTool }
     Copy-Item -LiteralPath $model -Destination $target
     $scriptTarget = Join-Path $Destination 'scripts'
     $null = New-Item -ItemType Directory -Path $scriptTarget
